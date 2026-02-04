@@ -64,17 +64,3 @@ def main(s: str, e: str) -> Tuple[
         r4.tolist(),
         r5.tolist()
     )
-
-
-if __name__ == "__main__":
-    with open('task2.csv', 'r') as file:
-        csv_data = file.read()
-    root_id = "1"
-
-    result = main(csv_data, root_id)
-    relations = ["r1", "r2", "r3", "r4", "r5"]
-    for rel, matrix in zip(relations, result):
-        print(f"{rel}:")
-        for row in matrix:
-            print([int(x) for x in row])
-        print()

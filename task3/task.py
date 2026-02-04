@@ -1,115 +1,98 @@
 import json
+import numpy as np
 
-def main(rank_a_str, rank_b_str, variant=2):
-    rank_a = json.loads(rank_a_str)
-    rank_b = json.loads(rank_b_str)
+def main(ranking1_json, ranking2_json):
+    data_a = json.loads(ranking1_json)
+    data_b = json.loads(ranking2_json)
     
-    objects = set()
-    for item in rank_a:
-        if isinstance(item, list):
-            objects.update(item)
-        else:
-            objects.add(item)
-    for item in rank_b:
-        if isinstance(item, list):
-            objects.update(item)
-        else:
-            objects.add(item)
+    def get_all_elements(ranking):
+        elements = []
+        for item in ranking:
+            if isinstance(item, list):
+                elements.extend(item)
+            else:
+                elements.append(item)
+        return elements
+
+    objects_list = sorted(list(set(get_all_elements(data_a) + get_all_elements(data_b))))
+    n = len(objects_list)
+    idx_map = {obj: i for i, obj in enumerate(objects_list)}
     
-    objects = sorted(list(objects))
-    n = len(objects)
-    obj_to_idx = {obj: i for i, obj in enumerate(objects)}
-    
-    def rank_to_matrix(rank):
-        matrix = [[0] * n for _ in range(n)]
-        for i in range(len(rank)):
-            cluster_i = rank[i] if isinstance(rank[i], list) else [rank[i]]
-            for obj_i in cluster_i:
-                idx_i = obj_to_idx[obj_i]
-                for j in range(i, len(rank)):
-                    cluster_j = rank[j] if isinstance(rank[j], list) else [rank[j]]
-                    for obj_j in cluster_j:
-                        idx_j = obj_to_idx[obj_j]
-                        matrix[idx_i][idx_j] = 1
+    def get_relation_matrix(ranking):
+        matrix = np.zeros((n, n), dtype=int)
+        clusters = [c if isinstance(c, list) else [c] for c in ranking]
+        
+        for i, current_cluster in enumerate(clusters):
+            for item_i in current_cluster:
+                idx_i = idx_map[item_i]
+                for item_j in current_cluster:
+                    matrix[idx_i][idx_map[item_j]] = 1
+                
+                for j in range(i + 1, len(clusters)):
+                    for item_j in clusters[j]:
+                        matrix[idx_i][idx_map[item_j]] = 1
         return matrix
+
+    y_a = get_relation_matrix(data_a)
+    y_b = get_relation_matrix(data_b)
     
-    def transpose(matrix):
-        return [[matrix[j][i] for j in range(n)] for i in range(n)]
+    conflicts = np.logical_or(
+        np.logical_and(y_a, y_b.T),
+        np.logical_and(y_a.T, y_b)
+    ).astype(int)
     
-    def logical_and(m1, m2):
-        return [[m1[i][j] & m2[i][j] for j in range(n)] for i in range(n)]
-    
-    def logical_or(m1, m2):
-        return [[m1[i][j] | m2[i][j] for j in range(n)] for i in range(n)]
-    
-    YA = rank_to_matrix(rank_a)
-    YB = rank_to_matrix(rank_b)
-    YA_T = transpose(YA)
-    YB_T = transpose(YB)
-    
-    P = logical_or(logical_and(YA, YB_T), logical_and(YA_T, YB))
-    
-    contradictions = []
+    c_matrix = np.logical_and(y_a, y_b).astype(int)
     for i in range(n):
         for j in range(i + 1, n):
-            if YA[i][j] == 1 and YA[j][i] == 0 and YB[i][j] == 0 and YB[j][i] == 1:
-                contradictions.append([objects[i], objects[j]])
-            elif YA[i][j] == 0 and YA[j][i] == 1 and YB[i][j] == 1 and YB[j][i] == 0:
-                contradictions.append([objects[i], objects[j]])
-    
-    if variant == 1:
-        return json.dumps(contradictions)
-    
-    C = logical_and(YA, YB)
-    
-    for pair in contradictions:
-        i = obj_to_idx[pair[0]]
-        j = obj_to_idx[pair[1]]
-        C[i][j] = 1
-        C[j][i] = 1
-    
-    E = logical_and(C, transpose(C))
-    
-    def warshall(matrix):
-        m = [row[:] for row in matrix]
-        for k in range(n):
-            for i in range(n):
-                for j in range(n):
-                    m[i][j] = m[i][j] | (m[i][k] & m[k][j])
-        return m
-    
-    E_star = warshall(E)
+            if conflicts[i][j] == 0:
+                c_matrix[i][j] = 1
+                c_matrix[j][i] = 1
+
+    e_matrix = np.logical_and(c_matrix, c_matrix.T).astype(int)
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                e_matrix[i][j] = e_matrix[i][j] or (e_matrix[i][k] and e_matrix[k][j])
     
     visited = [False] * n
-    clusters = []
+    final_clusters = []
     for i in range(n):
         if not visited[i]:
-            cluster = []
+            group = []
             for j in range(n):
-                if E_star[i][j] == 1:
-                    cluster.append(objects[j])
+                if e_matrix[i][j] == 1:
+                    group.append(objects_list[j])
                     visited[j] = True
-            clusters.append(sorted(cluster))
+            final_clusters.append(sorted(group))
+
+    m = len(final_clusters)
+    order_matrix = np.zeros((m, m), dtype=int)
+    for i in range(m):
+        for j in range(m):
+            if i != j:
+                if c_matrix[idx_map[final_clusters[i][0]]][idx_map[final_clusters[j][0]]] == 1:
+                    order_matrix[i][j] = 1
+
+    in_degree = [0] * m
+    for i in range(m):
+        for j in range(m):
+            if i != j and order_matrix[j][i] == 1:
+                in_degree[i] += 1
     
-    def cluster_less_than(c1, c2):
-        for obj1 in c1:
-            for obj2 in c2:
-                i1 = obj_to_idx[obj1]
-                i2 = obj_to_idx[obj2]
-                if C[i1][i2] == 1 and C[i2][i1] == 0:
-                    return True
-        return False
+    queue = [i for i in range(m) if in_degree[i] == 0]
+    sorted_indices = []
+    while queue:
+        curr = queue.pop(0)
+        sorted_indices.append(curr)
+        for neighbor in range(m):
+            if order_matrix[curr][neighbor] == 1 and curr != neighbor:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+    output = []
+    for idx in sorted_indices:
+        target = final_clusters[idx]
+        output.append(target if len(target) > 1 else target[0])
     
-    for i in range(len(clusters)):
-        for j in range(i + 1, len(clusters)):
-            if cluster_less_than(clusters[j], clusters[i]):
-                clusters[i], clusters[j] = clusters[j], clusters[i]
-    
-    result = []
-    for cluster in clusters:
-        if len(cluster) == 1:
-            result.append(cluster[0])
-        else:
-            result.append(cluster)
-    
-    return json.dumps(result)
+    return json.dumps(output, ensure_ascii=False)
